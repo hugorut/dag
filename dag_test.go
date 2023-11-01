@@ -2,10 +2,11 @@ package dag
 
 import (
 	"fmt"
-	"github.com/go-test/deep"
 	"sort"
 	"strconv"
 	"testing"
+
+	"github.com/go-test/deep"
 )
 
 type iVertex struct{ value int }
@@ -410,6 +411,104 @@ func TestDAG_AddEdge(t *testing.T) {
 	}
 	if _, ok := errNilDst.(IDEmptyError); !ok {
 		t.Errorf("AddEdge(v1, nil) expected IDEmptyError, got %T", errNilDst)
+	}
+}
+
+func TestDAG_AddEdges(t *testing.T) {
+	dag := NewDAG()
+	v0, _ := dag.AddVertex("0")
+	v1, _ := dag.AddVertex("1")
+	v2, _ := dag.AddVertex("2")
+	v3, _ := dag.AddVertex("3")
+
+	// add a single edge and inspect the graph
+	errUnexpected := dag.AddEdges([]EdgeInput{{v1, v2}, {v2, v3}, {v0, v1}})
+	if errUnexpected != nil {
+		t.Error(errUnexpected)
+	}
+	if leaves := len(dag.GetLeaves()); leaves != 1 {
+		t.Errorf("GetLeaves() = %d, want 1", leaves)
+	}
+	if roots := len(dag.GetRoots()); roots != 1 {
+		t.Errorf("GetRoots() = %d, want 1", roots)
+	}
+
+	if vertices, _ := dag.GetDescendants(v0); len(vertices) != 3 {
+		t.Errorf("GetDescendants(v0) = %d, want 3", len(vertices))
+	}
+	if vertices, _ := dag.GetDescendants(v1); len(vertices) != 2 {
+		t.Errorf("GetDescendants(v1) = %d, want 2", len(vertices))
+	}
+	if vertices, _ := dag.GetDescendants(v2); len(vertices) != 1 {
+		t.Errorf("GetDescendants(v2) = %d, want 1", len(vertices))
+	}
+	if vertices, _ := dag.GetDescendants(v3); len(vertices) != 0 {
+		t.Errorf("GetDescendants(v3) = %d, want 0", len(vertices))
+	}
+
+	if vertices, _ := dag.GetAncestors(v0); len(vertices) != 0 {
+		t.Errorf("GetAncestors(v0) = %d, want 0", len(vertices))
+	}
+	if vertices, _ := dag.GetAncestors(v1); len(vertices) != 1 {
+		t.Errorf("GetAncestors(v1) = %d, want 1", len(vertices))
+	}
+	if vertices, _ := dag.GetAncestors(v2); len(vertices) != 2 {
+		t.Errorf("GetAncestors(v2) = %d, want 2", len(vertices))
+	}
+	if vertices, _ := dag.GetAncestors(v3); len(vertices) != 3 {
+		t.Errorf("GetAncestors(v3) = %d, want 3", len(vertices))
+	}
+
+	// should allow duplicates
+	errUnexpected = dag.AddEdges([]EdgeInput{{v1, v2}, {v2, v3}, {v0, v1}})
+	if errUnexpected != nil {
+		t.Error(errUnexpected)
+	}
+
+	// nil
+	errNilSrc := dag.AddEdges([]EdgeInput{{"", v2}})
+	if errNilSrc == nil {
+		t.Errorf("AddEdges([nil, v2]) = nil, want %T", IDEmptyError{})
+	}
+	if _, ok := errNilSrc.(IDEmptyError); !ok {
+		t.Errorf("AddEdges([nil, v2]) expected IDEmptyError, got %T", errNilSrc)
+	}
+	errNilDst := dag.AddEdges([]EdgeInput{{v1, ""}})
+	if errNilDst == nil {
+		t.Errorf("AddEdges([v1, nil]) = nil, want %T", IDEmptyError{})
+	}
+	if _, ok := errNilDst.(IDEmptyError); !ok {
+		t.Errorf("AddEdges([v1, nil]) expected IDEmptyError, got %T", errNilDst)
+	}
+
+	// loop
+	errLoopSrcSrc := dag.AddEdges([]EdgeInput{{v1, v1}})
+	if errLoopSrcSrc == nil {
+		t.Errorf("AddEdges([v1, v1]) = nil, want %T", SrcDstEqualError{v1, v1})
+	}
+	if _, ok := errLoopSrcSrc.(SrcDstEqualError); !ok {
+		t.Errorf("AddEdges([v1, v1]) expected SrcDstEqualError, got %T", errLoopSrcSrc)
+	}
+
+	errLoopDstSrc := dag.AddEdges([]EdgeInput{{v2, v1}})
+	if errLoopDstSrc == nil {
+		t.Errorf("AddEdges([v2, v1]) = nil, want %T", CycleDetectedError{})
+	}
+	if _, ok := errLoopDstSrc.(CycleDetectedError); !ok {
+		t.Errorf("AddEdges([v2, v1]) expected CycleDetectedError, got %T", errLoopDstSrc)
+	}
+
+	// shouldn't add any vertices if one is an error
+	errSingleInvalid := dag.AddEdges([]EdgeInput{{v0, v2}, {v2, v1}})
+	if errSingleInvalid == nil {
+		t.Errorf("AddEdges([v0, v2], [v2, v1]) = nil, want %T", CycleDetectedError{})
+	}
+	if _, ok := errSingleInvalid.(CycleDetectedError); !ok {
+		t.Errorf("AddEdges([v0, v2], [v2, v1]) expected CycleDetectedError, got %T", errSingleInvalid)
+	}
+	children, _ := dag.getChildren(v0)
+	if _, exists := children[v2]; exists {
+		t.Errorf("GetChildren()[v2] = %t, want false", exists)
 	}
 }
 
@@ -1225,6 +1324,7 @@ func TestErrors(t *testing.T) {
 		{"edge between '1' and '2' is already known", EdgeDuplicateError{"1", "2"}},
 		{"edge between '1' and '2' is unknown", EdgeUnknownError{"1", "2"}},
 		{"edge between '1' and '2' would create a loop", EdgeLoopError{"1", "2"}},
+		{"cycle detected", CycleDetectedError{}},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%T", tt.err), func(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	lls "github.com/emirpasic/gods/stacks/linkedliststack"
 	"github.com/google/uuid"
 )
 
@@ -15,6 +16,13 @@ import (
 // generated ids (as of adding them to the graph).
 type IDInterface interface {
 	ID() string
+}
+
+// EdgeInput represents an edge between two vertices, used when adding multiple
+// edges at once.
+type EdgeInput struct {
+	SrcID string
+	DstID string
 }
 
 // DAG implements the data structure of the DAG.
@@ -174,7 +182,6 @@ func (d *DAG) DeleteVertex(id string) error {
 // error, if srcID or dstID are empty strings or unknown, if the edge
 // already exists, or if the new edge would create a loop.
 func (d *DAG) AddEdge(srcID, dstID string) error {
-
 	d.muDAG.Lock()
 	defer d.muDAG.Unlock()
 
@@ -235,6 +242,152 @@ func (d *DAG) AddEdge(srcID, dstID string) error {
 	delete(d.descendantsCache, src)
 
 	return nil
+}
+
+// AddEdges adds multiple edges at once and then checks for cycles.
+// AddEdges returns an error, if any srcID or dstID are empty strings
+// or unknown, or a cycle is detected after adding the edges.
+func (d *DAG) AddEdges(edges []EdgeInput) error {
+	d.muDAG.Lock()
+	defer d.muDAG.Unlock()
+
+	addedInbound := make(map[interface{}]map[interface{}]struct{})
+	addedOutbound := make(map[interface{}]map[interface{}]struct{})
+
+	var addErr error
+
+	for _, edge := range edges {
+		srcID := edge.SrcID
+		dstID := edge.DstID
+
+		if err := d.saneID(srcID); err != nil {
+			addErr = err
+			break
+		}
+
+		if err := d.saneID(dstID); err != nil {
+			addErr = err
+			break
+		}
+
+		if srcID == dstID {
+			addErr = SrcDstEqualError{srcID, dstID}
+			break
+		}
+
+		src := d.vertexIds[srcID]
+		dst := d.vertexIds[dstID]
+
+		// if the edge is already known, skip to the next
+		if d.isEdge(src, dst) {
+			continue
+		}
+
+		// prepare d.outbound[src], iff needed
+		if _, exists := d.outboundEdge[src]; !exists {
+			d.outboundEdge[src] = make(map[interface{}]struct{})
+		}
+
+		// dst is a child of src
+		d.outboundEdge[src][dst] = struct{}{}
+
+		// prepare d.inboundEdge[dst], iff needed
+		if _, exists := d.inboundEdge[dst]; !exists {
+			d.inboundEdge[dst] = make(map[interface{}]struct{})
+		}
+
+		// src is a parent of dst
+		d.inboundEdge[dst][src] = struct{}{}
+
+		// remember the added edges
+		if _, exists := addedOutbound[src]; !exists {
+			addedOutbound[src] = make(map[interface{}]struct{})
+		}
+		addedOutbound[src][dst] = struct{}{}
+
+		if _, exists := addedInbound[dst]; !exists {
+			addedInbound[dst] = make(map[interface{}]struct{})
+		}
+		addedInbound[dst][src] = struct{}{}
+
+		// clear cache
+		delete(d.ancestorsCache, src)
+		delete(d.descendantsCache, dst)
+	}
+
+	// check for cycles after all edges have been added
+	if addErr == nil && d.hasCycle() {
+		addErr = CycleDetectedError{}
+	}
+
+	// if there's any errors then undo the changes
+	if addErr != nil {
+		for src, dsts := range addedOutbound {
+			for dst := range dsts {
+				delete(d.outboundEdge[src], dst)
+			}
+		}
+
+		for dst, srcs := range addedInbound {
+			for src := range srcs {
+				delete(d.inboundEdge[dst], src)
+			}
+		}
+
+		return addErr
+	}
+
+	return nil
+}
+
+// hasCycle returns true if the DAG has a cycle.
+func (d *DAG) hasCycle() bool {
+	stack := lls.New()
+
+	vertices := d.getRoots()
+	for _, id := range reversedVertexIDs(vertices) {
+		v := vertices[id]
+		sv := storableVertex{WrappedID: id, Value: v}
+		stack.Push(sv)
+	}
+
+	visited := make(map[string]bool, d.getOrder())
+	// recStack keeps track of the current vertices in the stack.
+	// If a vertex is already in the stack when we visit it then
+	// we have found a cycle.
+	recStack := make(map[string]bool, d.getOrder())
+
+	for !stack.Empty() {
+		v, _ := stack.Peek()
+		sv := v.(storableVertex)
+
+		if !visited[sv.WrappedID] {
+			visited[sv.WrappedID] = true
+			recStack[sv.WrappedID] = true
+		}
+
+		allVisited := true
+
+		vertices, _ := d.getChildren(sv.WrappedID)
+		for _, id := range reversedVertexIDs(vertices) {
+			v := vertices[id]
+			sv := storableVertex{WrappedID: id, Value: v}
+			if !visited[sv.WrappedID] {
+				stack.Push(sv)
+				allVisited = false
+				break
+			} else if recStack[sv.WrappedID] {
+				return true
+			}
+		}
+
+		if allVisited {
+			stack.Pop()
+			delete(recStack, sv.WrappedID)
+		}
+	}
+
+	return false
 }
 
 // IsEdge returns true, if there exists an edge between srcID and dstID.
@@ -1229,6 +1382,15 @@ type EdgeLoopError struct {
 // Implements the error interface.
 func (e EdgeLoopError) Error() string {
 	return fmt.Sprintf("edge between '%s' and '%s' would create a loop", e.src, e.dst)
+}
+
+// CycleDetectedError is the error type to describe if a cycle is detected
+// after adding multiple edges.
+type CycleDetectedError struct{}
+
+// Implements the error interface.
+func (e CycleDetectedError) Error() string {
+	return fmt.Sprintf("cycle detected")
 }
 
 // SrcDstEqualError is the error type to describe the situation, that src and
