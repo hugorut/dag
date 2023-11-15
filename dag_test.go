@@ -1324,7 +1324,7 @@ func TestErrors(t *testing.T) {
 		{"edge between '1' and '2' is already known", EdgeDuplicateError{"1", "2"}},
 		{"edge between '1' and '2' is unknown", EdgeUnknownError{"1", "2"}},
 		{"edge between '1' and '2' would create a loop", EdgeLoopError{"1", "2"}},
-		{"cycle detected", CycleDetectedError{}},
+		{"cycle detected containing edge '1'", CycleDetectedError{"1"}},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%T", tt.err), func(t *testing.T) {

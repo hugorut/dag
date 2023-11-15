@@ -316,8 +316,8 @@ func (d *DAG) AddEdges(edges []EdgeInput) error {
 	}
 
 	// check for cycles after all edges have been added
-	if addErr == nil && d.hasCycle() {
-		addErr = CycleDetectedError{}
+	if addErr == nil {
+		addErr = d.checkForCycles()
 	}
 
 	// if there's any errors then undo the changes
@@ -341,7 +341,7 @@ func (d *DAG) AddEdges(edges []EdgeInput) error {
 }
 
 // hasCycle returns true if the DAG has a cycle.
-func (d *DAG) hasCycle() bool {
+func (d *DAG) checkForCycles() error {
 	stack := lls.New()
 
 	vertices := d.getRoots()
@@ -377,7 +377,7 @@ func (d *DAG) hasCycle() bool {
 				allVisited = false
 				break
 			} else if recStack[sv.WrappedID] {
-				return true
+				return CycleDetectedError{sv.WrappedID}
 			}
 		}
 
@@ -387,7 +387,7 @@ func (d *DAG) hasCycle() bool {
 		}
 	}
 
-	return false
+	return nil
 }
 
 // IsEdge returns true, if there exists an edge between srcID and dstID.
@@ -1386,11 +1386,13 @@ func (e EdgeLoopError) Error() string {
 
 // CycleDetectedError is the error type to describe if a cycle is detected
 // after adding multiple edges.
-type CycleDetectedError struct{}
+type CycleDetectedError struct {
+	id string
+}
 
 // Implements the error interface.
 func (e CycleDetectedError) Error() string {
-	return fmt.Sprintf("cycle detected")
+	return fmt.Sprintf("cycle detected containing edge '%s'", e.id)
 }
 
 // SrcDstEqualError is the error type to describe the situation, that src and
