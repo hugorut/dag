@@ -3,6 +3,7 @@ package dag
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	lls "github.com/emirpasic/gods/stacks/linkedliststack"
@@ -316,7 +317,7 @@ func (d *DAG) AddEdges(edges []EdgeInput) error {
 	}
 
 	// check for cycles after all edges have been added
-	if addErr == nil {
+	if addErr == nil && os.Getenv("INFRACOST_DISABLE_DAG_CYCLE_CHECK") != "true" {
 		addErr = d.checkForCycles()
 	}
 
